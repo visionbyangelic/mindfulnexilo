@@ -140,6 +140,12 @@ def resilience_score():
         return jsonify({"error": "Request body must include non-empty `text`."}), 400
 
     user_text = raw_text.strip()
+
+    if not GOOGLE_API_KEY:
+        return jsonify({
+            "error": "GOOGLE_API_KEY is not configured. Set the environment variable and redeploy.",
+        }), 500
+
     high_risk = is_imminent_risk(user_text)
 
     prompt = f"""

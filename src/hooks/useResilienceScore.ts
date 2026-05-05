@@ -111,7 +111,12 @@ export const useResilienceScore = ({
           signal: ctrl.signal,
         });
         if (!res.ok) {
-          throw new Error(`Resilience endpoint failed [${res.status}]`);
+          const errorBody = await res.json().catch(() => null);
+          const message =
+            errorBody && typeof errorBody === "object" && "error" in errorBody
+              ? `${(errorBody as Record<string, unknown>).error}`
+              : `Resilience endpoint failed [${res.status}]`;
+          throw new Error(message);
         }
         const json = await res.json();
         const parsedScore = extractScore(json);
