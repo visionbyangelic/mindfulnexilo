@@ -28,8 +28,18 @@ import type { TriageState } from "@/components/ResilienceWave";
 export interface ResilienceResponse {
   score: number;
   state: TriageState;
+  reply?: string;
   raw: unknown;
 }
+
+export type ResilienceResult = ResilienceResponse | { error: string };
+
+const extractReply = (json: unknown): string | null => {
+  if (!json || typeof json !== "object") return null;
+  const o = json as Record<string, unknown>;
+  const candidate = o.reply ?? o.response ?? o.message;
+  return typeof candidate === "string" ? candidate.trim() || null : null;
+};
 
 interface Options {
   /** Backend URL. Defaults to VITE_RESILIENCE_ENDPOINT, then "/api/resilience-score". */
@@ -81,7 +91,7 @@ export const useResilienceScore = ({
     "/api/resilience-score";
 
   const submit = useCallback(
-    async (text: string): Promise<ResilienceResponse | null> => {
+    async (text: string): Promise<ResilienceResult | null> => {
       const trimmed = text.trim();
       if (!trimmed) return null;
 
@@ -109,7 +119,8 @@ export const useResilienceScore = ({
           throw new Error("Resilience response missing numeric `score`");
         }
         const state = extractState(json) ?? scoreToState(parsedScore);
-        const result: ResilienceResponse = { score: parsedScore, state, raw: json };
+        const reply = extractReply(json);
+        const result: ResilienceResponse = { score: parsedScore, state, reply: reply ?? undefined, raw: json };
         setScore(parsedScore);
         onScore?.(result);
         return result;
@@ -117,7 +128,7 @@ export const useResilienceScore = ({
         if ((e as Error).name === "AbortError") return null;
         const msg = e instanceof Error ? e.message : "Unknown error";
         setError(msg);
-        return null;
+        return { error: msg };
       } finally {
         if (abortRef.current === ctrl) {
           setLoading(false);

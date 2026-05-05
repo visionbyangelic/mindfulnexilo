@@ -96,7 +96,7 @@ const SafeHavenChat = () => {
     if (inputFocused && pulseOpen) setPulseOpen(false);
   }, [inputFocused, pulseOpen]);
 
-  const send = () => {
+  const send = async () => {
     const text = draft.trim();
     if (!text) return;
     setMessages((m) => [...m, { from: "you", text }]);
@@ -108,9 +108,24 @@ const SafeHavenChat = () => {
     const id = Date.now();
     setRipples((r) => [...r, id]);
     window.setTimeout(() => setRipples((r) => r.filter((x) => x !== id)), 650);
-    // Fire-and-forget POST to the resilience backend; the hook updates triage
-    // (and therefore the wave color) when the score returns.
-    void submitForScore(text);
+
+    const result = await submitForScore(text);
+    if (!result) return;
+
+    if ("error" in result) {
+      setMessages((m) => [
+        ...m,
+        {
+          from: "haven",
+          text: `Error: ${result.error}`,
+        },
+      ]);
+      return;
+    }
+
+    const replyText = result.reply?.trim() ||
+      "I heard you. Thank you for sharing that — I’m here with you."
+    setMessages((m) => [...m, { from: "haven", text: replyText }]);
   };
 
   // Luxury haptic — 40ms "deep pulse" when the Evolutionary Drawer snaps open.
@@ -348,6 +363,25 @@ const SafeHavenChat = () => {
               </motion.div>
             );
           })}
+          {scoring && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+              className="self-start max-w-[62%] rounded-2xl rounded-bl-md px-4 py-3 text-[14px] leading-relaxed text-foreground/75"
+              style={{
+                background: "rgba(255,255,255,0.02)",
+                border: "1px solid rgba(255,255,255,0.05)",
+                backdropFilter: "blur(10px)",
+                WebkitBackdropFilter: "blur(10px)",
+              }}
+            >
+              <div className="inline-flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-foreground animate-pulse" />
+                <span>Typing…</span>
+              </div>
+            </motion.div>
+          )}
           </motion.div>
           )}
         </main>
@@ -400,12 +434,15 @@ const SafeHavenChat = () => {
                 onChange={onInputChange}
                 onFocus={() => setInputFocused(true)}
                 onBlur={() => setInputFocused(false)}
-                placeholder="Say what's true right now…"
-                className="flex-1 bg-transparent outline-none text-[14px] text-foreground placeholder:text-muted-foreground/70 py-1.5"
+                placeholder={scoring ? "Thinking…" : "Say what's true right now…"}
+                disabled={scoring}
+                className="flex-1 bg-transparent outline-none text-[14px] text-foreground placeholder:text-muted-foreground/70 py-1.5 disabled:cursor-wait disabled:opacity-70"
               />
               <button
                 type="submit"
+                disabled={scoring}
                 aria-label="Send"
+                aria-busy={scoring}
                 className={`relative w-9 h-9 rounded-full flex items-center justify-center text-primary-foreground transition-transform active:scale-95 ${sendGlowClass}`}
                 style={{
                   background: "var(--wave-color)",
