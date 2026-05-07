@@ -5,14 +5,17 @@ from flask import Flask, request, jsonify
 import google.generativeai as genai
 from dotenv import load_dotenv
 
+# Load environment variables from a local .env file for development.
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+# Configure the Gemini client only when the API key is available.
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
 
 app = Flask(__name__)
 
+# System instruction forces the model to return JSON only, avoiding prose or markdown.
 SYSTEM_INSTRUCTION = """
 You are a clinical resilience scoring engine for a safe-haven journaling app.
 Evaluate the user's text and return only valid JSON with these keys:
@@ -23,6 +26,8 @@ Evaluate the user's text and return only valid JSON with these keys:
 Do not include any surrounding prose or markdown.
 """
 
+# Regex pattern to find the first JSON object in the model response.
+# This helps recover JSON output even if the model returns extra surrounding text.
 JSON_RE = re.compile(r"\{(?:[^{}]|\{[^{}]*\})*\}", re.S)
 
 
@@ -32,6 +37,7 @@ def find_json_object(text: str) -> str | None:
 
 
 def normalize_state(value: str | None) -> str:
+    # Normalize different state labels to one of the supported categories.
     if not isinstance(value, str):
         return "crisis"
     normalized = value.strip().lower()
@@ -45,6 +51,7 @@ def normalize_state(value: str | None) -> str:
 
 
 def normalize_score(value) -> int | None:
+    # Convert score values from multiple formats into a clean 0-100 integer.
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -65,6 +72,8 @@ def normalize_score(value) -> int | None:
     return None
 
 
+# Patterns used to detect imminent self-harm or suicidal intent in user text.
+# If any of these phrases appear, the request is short-circuited to a safe crisis response.
 HIGH_RISK_PATTERNS = [
     r"\bkill myself\b",
     r"\bkill me\b",
@@ -93,10 +102,12 @@ RISK_RE = re.compile("|".join(HIGH_RISK_PATTERNS), re.I)
 
 
 def is_imminent_risk(text: str) -> bool:
+    # Return True if the user's text matches any high-risk phrase.
     return bool(RISK_RE.search(text))
 
 
 def crisis_fallback_reply() -> str:
+    # Default compassionate fallback when no model output is available.
     return (
         "I hear that you are feeling extremely unsafe right now. "
         "If you can, please contact local emergency services or a crisis hotline immediately. "
@@ -105,6 +116,7 @@ def crisis_fallback_reply() -> str:
 
 
 def override_high_risk(parsed: dict, raw_output: str) -> dict:
+    # Force a crisis-level response when high-risk language is detected.
     score = 0
     state = "crisis"
     reasoning = parsed.get("reasoning") if isinstance(parsed.get("reasoning"), str) else None
@@ -121,6 +133,8 @@ def override_high_risk(parsed: dict, raw_output: str) -> dict:
 
 
 def extract_json_payload(text: str) -> dict:
+    # Attempt to parse JSON from the model response.
+    # This recovers valid JSON even if the model includes extra text.
     if not text:
         raise ValueError("Empty response text")
     candidate = find_json_object(text)
@@ -131,6 +145,7 @@ def extract_json_payload(text: str) -> dict:
 
 @app.route("/api/resilience-score", methods=["POST"])
 def resilience_score():
+    # Parse the incoming body as JSON and reject invalid requests early.
     payload = request.get_json(silent=True)
     if not payload or not isinstance(payload, dict):
         return jsonify({"error": "Request body must be JSON."}), 400
@@ -139,6 +154,7 @@ def resilience_score():
     if not isinstance(raw_text, str) or not raw_text.strip():
         return jsonify({"error": "Request body must include non-empty `text`."}), 400
 
+    # Trim whitespace from the user's journal entry.
     user_text = raw_text.strip()
 
     if not GOOGLE_API_KEY:
@@ -146,8 +162,12 @@ def resilience_score():
             "error": "GOOGLE_API_KEY is not configured. Set the environment variable and redeploy.",
         }), 500
 
+    # Perform a pre-check for high-risk content before calling the model.
     high_risk = is_imminent_risk(user_text)
+    if high_risk:
+        return jsonify(override_high_risk({}, ""))
 
+    # Build the model prompt for a JSON-only resilience assessment.
     prompt = f"""
 Assess the following journal entry for psychological resilience.
 Return ONLY valid JSON with keys: score, state, reasoning, reply.
@@ -160,7 +180,7 @@ User entry:
 
     try:
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-flash-lite",
             system_instruction=SYSTEM_INSTRUCTION,
         )
         session = model.start_chat(history=[])
@@ -171,9 +191,7 @@ User entry:
         if not isinstance(parsed, dict):
             raise ValueError("Gemini response did not contain a JSON object.")
 
-        if high_risk:
-            return jsonify(override_high_risk(parsed, raw_output))
-
+        # Normalize the model response before sending it to the client.
         score = normalize_score(parsed.get("score"))
         state = normalize_state(parsed.get("state") if isinstance(parsed.get("state"), str) else None)
         reasoning = parsed.get("reasoning") if isinstance(parsed.get("reasoning"), str) else ""
@@ -206,4 +224,5 @@ User entry:
 
 
 if __name__ == "__main__":
+    # Run Flask in development mode on the local network.
     app.run(host="0.0.0.0", port=5000, debug=True)
